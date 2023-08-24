@@ -86,6 +86,23 @@ def _text_input_py_callback(comma_separated_queries: str, *,
   # Compute box display alphas based on prediction scores:
   query_embeddings = model.embed_text_queries(queries)
   top_query_ind, scores = model.get_scores(image, query_embeddings, num_queries)
+  
+  # Apply non-maximum suppression:
+  if IMAGE_COND_NMS_IOU_THRESHOLD < 1.0:
+    for i in range(num_queries):
+      _, _, target_image_boxes = model.embed_image(target_image)
+      target_boxes_yxyx = box_utils.box_cxcywh_to_yxyx(target_image_boxes, np)
+      for i in np.argsort(-scores):
+        if not scores[i]:
+          # This box is already suppressed, continue:
+          continue
+        ious = box_utils.box_iou(
+            target_boxes_yxyx[None, [i], :],
+            target_boxes_yxyx[None, :, :],
+            np_backbone=np)[0][0, 0]
+        ious[i] = -1.0  # Mask self-IoU.
+        scores[ious > IMAGE_COND_NMS_IOU_THRESHOLD] = 0.0
+      
   alphas = np.zeros_like(scores)
   for i in range(num_queries):
     # Select scores for boxes matching the current query:
@@ -100,6 +117,7 @@ def _text_input_py_callback(comma_separated_queries: str, *,
     # shown.
     max_score = np.max(query_scores) + 1e-6
     query_alphas = (query_scores - (max_score * 0.1)) / (max_score * 0.9)
+    query_alphas[query_alphas < IMAGE_COND_MIN_CONF] = 0.0
     query_alphas = np.clip(query_alphas, 0.0, 1.0)
     alphas[query_mask] = query_alphas
 
